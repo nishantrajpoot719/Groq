@@ -6,3 +6,4 @@ groq==0.26.0
 gunicorn==21.2.0
 requests==2.31.0
 gevent==23.7.0
+gradio-client
