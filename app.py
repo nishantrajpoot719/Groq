@@ -76,7 +76,7 @@ class FoodRecommendationRequest(BaseModel):
     vad_score: List[float]  # [valence, arousal, dominance]
     contextual_data: Dict[str, Any]
 
-@app.post("/api/process_video")
+@app.get("/api/process_video")
 async def process_video_endpoint(
     video_input: str,
 
