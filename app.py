@@ -76,47 +76,28 @@ class FoodRecommendationRequest(BaseModel):
     vad_score: List[float]  # [valence, arousal, dominance]
     contextual_data: Dict[str, Any]
 
-@app.get("/api/process_video")
+@app.post("/api/process_video")
 async def process_video_endpoint(
-    video_input: VideoInput = None,
-    file: UploadFile = File(None)
+    video_input: str,
+
 ):
     """
     Process video through Gradio API and return food recommendations.
     Accepts either a video URL, file upload, or direct JSON input.
     """
     try:
-        # Handle file upload
-        if file:
-            # Save the uploaded file temporarily
-            temp_path = f"temp_{file.filename}"
-            with open(temp_path, "wb") as buffer:
-                buffer.write(await file.read())
-            
-            try:
-                # Process the video through Gradio API
-                gradio_result = GRADIO_CLIENT.predict(
-                    video_input={"video": handle_file(temp_path)},
-                    api_name="/process_video"
-                )
-            finally:
-                # Clean up the temporary file
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
         
         # Handle URL or local path input
-        elif video_input and (video_input.video_url or video_input.video_path):
-            video_source = video_input.video_url or video_input.video_path
-            
+        if video_input:
             # Basic validation for URL or local path
-            if not (is_valid_url(video_source) or Path(video_source).exists()):
+            if not (is_valid_url(video_input)):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid video URL or file not found: {video_source}"
+                    detail=f"Invalid video URL or file not found: {video_input}"
                 )
             
             gradio_result = GRADIO_CLIENT.predict(
-                video_input={"video": handle_file(video_source)},
+                video_input={"video": handle_file(video_input)},
                 api_name="/process_video"
             )
         else:
@@ -124,7 +105,6 @@ async def process_video_endpoint(
                 status_code=400,
                 detail="Either provide a video file or video URL/path"
             )
-        
         # Extract only the required fields (VAD scores and contextual data)
         # Expected gradio_result format:
         # {
