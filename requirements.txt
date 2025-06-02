@@ -1,9 +1,7 @@
-flask==2.3.3
-flask-cors==4.0.0
-flask-limiter==3.5.0
 python-dotenv==1.0.0
 groq==0.26.0
-gunicorn==21.2.0
 requests==2.31.0
-gevent==23.7.0
-gradio_client
+fastapi>=0.68.0
+uvicorn>=0.15.0
+python-multipart>=0.0.5
+gradio==5.31.0
