@@ -485,5 +485,5 @@ In the output what you must include is(and the output should be in JSON):
             
     return jsonify(response_data)
 
-if _name_ == "_main_":
+if __name__ == "_main_":
     app.run(debug = True)
