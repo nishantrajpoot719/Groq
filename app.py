@@ -3,12 +3,15 @@ import logging
 import os
 import sys
 from typing import Dict, Any, List, Optional
+import urllib.parse
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 from gradio_client import Client, handle_file
 from pydantic import BaseModel
+from groq import Groq
 
 # Load environment variables
 load_dotenv()
@@ -22,10 +25,6 @@ app = FastAPI(title="Food Recommendation API")
 
 # Initialize Gradio client
 GRADIO_CLIENT = Client("nishantrajpoot/must_duplicate")
-
-class VideoProcessingError(Exception):
-    """Custom exception for video processing errors."""
-    pass
 
 
 def setup_logging() -> logging.Logger:
@@ -51,93 +50,244 @@ def setup_logging() -> logging.Logger:
 
 logger = setup_logging()
 
-
-def process_video(video_url: str) -> Dict[str, Any]:
-    """
-    Process video using Gradio API and return food recommendations.
+def is_valid_url(url: str) -> bool:
+    """Check if the provided string is a valid URL.
     
     Args:
-        video_url: URL or local path of the video to process
+        url: The URL to validate
         
     Returns:
-        Dict containing the processing results with the following structure:
-        {
-            "status": "success" | "error",
-            "result": Any,  # The processed result if successful
-            "message": str  # Error message if status is "error"
-        }
-        
-    Raises:
-        VideoProcessingError: If there's an error processing the video
+        bool: True if URL is valid, False otherwise
     """
-    
     try:
-        logger.info("Initializing Gradio client...")
-        # Initialize client with error handling
-        try:
-            client = Client("nishantrajpoot/must_duplicate")
-        except Exception as e:
-            error_msg = f"Failed to initialize Gradio client: {str(e)}"
-            logger.error(error_msg)
-            raise VideoProcessingError(error_msg) from e
-        
-        logger.info(f"Processing video: {video_url}")
-        
-        try:
-            # Handle file (works with both URLs and local paths)
-            processed_file = handle_file(video_url)
+        result = urllib.parse.urlparse(url)
+        return all([result.scheme, result.netloc])
+    except (ValueError, AttributeError):
+        return False
+
+
+class VideoInput(BaseModel):
+    video_url: Optional[str] = None
+    video_path: Optional[str] = None
+
+class FoodRecommendationRequest(BaseModel):
+    audio_emotion: str
+    video_emotion: str
+    vad_score: List[float]  # [valence, arousal, dominance]
+    contextual_data: Dict[str, Any]
+
+@app.post("/api/process_video")
+async def process_video_endpoint(
+    video_input: VideoInput = None,
+    file: UploadFile = File(None)
+):
+    """
+    Process video through Gradio API and return food recommendations.
+    Accepts either a video URL, file upload, or direct JSON input.
+    """
+    try:
+        # Handle file upload
+        if file:
+            # Save the uploaded file temporarily
+            temp_path = f"temp_{file.filename}"
+            with open(temp_path, "wb") as buffer:
+                buffer.write(await file.read())
             
-            # Call the Gradio API
-            result = client.predict(
-                video_input={"video": processed_file},
+            try:
+                # Process the video through Gradio API
+                gradio_result = GRADIO_CLIENT.predict(
+                    video_input={"video": handle_file(temp_path)},
+                    api_name="/process_video"
+                )
+            finally:
+                # Clean up the temporary file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        
+        # Handle URL or local path input
+        elif video_input and (video_input.video_url or video_input.video_path):
+            video_source = video_input.video_url or video_input.video_path
+            
+            # Basic validation for URL or local path
+            if not (is_valid_url(video_source) or Path(video_source).exists()):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid video URL or file not found: {video_source}"
+                )
+            
+            gradio_result = GRADIO_CLIENT.predict(
+                video_input={"video": handle_file(video_source)},
                 api_name="/process_video"
             )
-            
-            logger.info("Successfully processed video")
-            return {
-                "status": "success",
-                "result": result,
-                "message": "Video processed successfully"
-            }
-            
-            
-        except Exception as e:
-            error_msg = f"Error during video processing: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            raise VideoProcessingError(error_msg) from e
-            
-    except VideoProcessingError:
-        # Re-raise our custom exceptions
-        raise
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either provide a video file or video URL/path"
+            )
         
+        # Extract only the required fields (VAD scores and contextual data)
+        # Expected gradio_result format:
+        # {
+        #   'audio_emotion': str,
+        #   'video_emotion': str,
+        #   'vad_score': [float, float, float],  # valence, arousal, dominance
+        #   'contextual_data': {
+        #       'time': str,
+        #       'date': str,
+        #       'location': str,
+        #       'weather': str,
+        #       'intent': List[str]  # optional
+        #   }
+        # }
+        
+        # Ensure we have the expected structure
+        if not isinstance(gradio_result, dict):
+            raise ValueError("Unexpected response format from Gradio API")
+            
+        # Extract VAD scores (ensure we have 3 values)
+        vad_score = gradio_result.get('vad_score', [0, 0, 0])
+        if not isinstance(vad_score, list) or len(vad_score) != 3:
+            logger.warning(f"Invalid VAD score format: {vad_score}")
+            vad_score = [0, 0, 0]
+            
+        # Get contextual data (ensure it's a dict)
+        contextual_data = gradio_result.get('contextual_data', {})
+        if not isinstance(contextual_data, dict):
+            contextual_data = {}
+            
+        # Prepare analysis data with only the required fields
+        analysis_data = {
+            'vad_score': vad_score,
+            'contextual_data': contextual_data
+        }
+        
+        # Get food recommendations using only VAD scores and contextual data
+        food_recommendations = get_food_recommendations(analysis_data)
+        
+        return JSONResponse(content={
+            "status": "success",
+            "data": food_recommendations,
+            "metadata": {
+                "source": "Gradio API processed",
+                "model_used": "nishantrajpoot/must_duplicate"
+            }
+        })
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        # Catch any other unexpected errors
-        error_msg = f"Unexpected error: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise VideoProcessingError(error_msg) from e
+        logger.exception("Error processing video")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing video: {str(e)}"
+        )
+
+
+@app.post("/api/process_direct")
+async def process_direct_endpoint(request: FoodRecommendationRequest):
+    """
+    Process already extracted features directly to get food recommendations.
+    
+    Expected input format:
+    {
+        "audio_emotion": str,  # Optional
+        "video_emotion": str,  # Optional
+        "vad_score": [float, float, float],  # [valence, arousal, dominance]
+        "contextual_data": {   # Optional
+            "time": str,
+            "date": str,
+            "location": str,
+            "weather": str,
+            "intent": List[str]  # Optional
+        }
+    }
+    """
+    try:
+        # Validate VAD scores
+        if not request.vad_score or len(request.vad_score) != 3:
+            raise HTTPException(
+                status_code=400,
+                detail="VAD score must contain exactly 3 values [valence, arousal, dominance]"
+            )
+            
+        # Ensure contextual_data is a dictionary
+        contextual_data = request.contextual_data or {}
+        if not isinstance(contextual_data, dict):
+            contextual_data = {}
+            
+        # Process the input data to get food recommendations
+        analysis_data = {
+            'vad_score': request.vad_score,
+            'contextual_data': contextual_data
+        }
+        
+        food_recommendations = get_food_recommendations(analysis_data)
+        
+        return JSONResponse(content={
+            "status": "success",
+            "data": food_recommendations,
+            "metadata": {
+                "source": "Direct input processed"
+            }
+        })
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.exception("Error processing direct input")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing input: {str(e)}"
+        )
+
+def get_food_recommendations(analysis_result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Process the analysis result and return food recommendations using Groq API.
+    
+    Args:
+        analysis_result: Dictionary containing vad_score, and contextual_data
+        
+    Returns:
+        Dict containing food recommendations and analysis
+    """
+    try:
+        # Get VAD scores (Valence, Arousal, Dominance)
+        vad_score = analysis_result.get('vad_score', [0, 0, 0])
+        if len(vad_score) != 3:
+            vad_score = [0, 0, 0]
+            
+        # Get contextual data
+        contextual_data = analysis_result.get('contextual_data', {})
+        
+        # Default intent (can be overridden by contextual data)
+        intent = contextual_data.get('intent', [])
+        if not isinstance(intent, list):
+            intent = [intent] if intent else []
+            
+        # Prepare input for Groq API
+        input_data = [vad_score, intent, contextual_data]
+        
+        # Initialize Groq client
+        GROQ_API_KEY = os.getenv("GROQ_API_KEY")
         if not GROQ_API_KEY:
             logger.error("GROQ_API_KEY not found in environment variables")
-            return jsonify({
-                "status": "error",
-                "emotion": "",
-                "top_products": [],
-                "top_combos": [],
-                "message": "Server configuration error: GROQ_API_KEY not found"
-            }), 500
+            raise HTTPException(
+                status_code=500,
+                detail="Server configuration error: GROQ_API_KEY not found"
+            )
             
         # Validate Groq API key format
-        if not isinstance(GROQ_API_KEY, str) or len(GROQ_API_KEY) < 30:  # Basic validation
+        if not isinstance(GROQ_API_KEY, str) or len(GROQ_API_KEY) < 30:
             logger.error("Invalid GROQ_API_KEY format")
-            return jsonify({
-                "status": "error",
-                "message": "Invalid server configuration"
-            }), 500
+            raise HTTPException(
+                status_code=500,
+                detail="Invalid server configuration"
+            )
             
         try:
             client = Groq(api_key=GROQ_API_KEY)
-            
-            # Create the input data in the expected format
-            input_data = [vad_score, intent_selections, contextual_data]
             
             # Call the Groq API
             completion = client.chat.completions.create(
@@ -329,7 +479,7 @@ Product Dictionary: {
     },
     "Dry Bhel": {
         "variants": [],
-        "description": "A popular Indian snack made with puffed rice, sev (crunchy chickpea noodles), roasted peanuts, and a mix of tangy and spicy chutneys or masalas. Unlike its wetter counterpart, it's served without tamarind sauce, making it crisp, light, and easy to enjoy on the go. Garnished with chopped onions, tomatoes, coriander, and a squeeze of lime. A delicious and satisfying food item suitable for snacks or meals. ideal for munching anytime."
+        "description": "A popular Indian snack made with puffed rice, sev (crunchy chickpea noodles), roasted peanuts, and a mix of tangy and spicy chutneys or masalas. Unlike its wetter counterpart, it’s served without tamarind sauce, making it crisp, light, and easy to enjoy on the go. Garnished with chopped onions, tomatoes, coriander, and a squeeze of lime. A delicious and satisfying food item suitable for snacks or meals. ideal for munching anytime."
     },
     "Spiced Coated Peanuts": {
         "variants": [],
@@ -453,6 +603,53 @@ Below are the use cases(but not limited to If you can think of more you should c
         "HighV_LowA_HighD": {
             "emotions": [
                 "Content",
+                "Peaceful"
+            ],
+            "food_behavior": "Mindful, healthy eating"
+        },
+        "LowV_HighA_LowD": {
+            "emotions": [
+                "Anxious",
+                "Stressed",
+                "Helpless"
+            ],
+            "food_behavior": "Emotional or binge eating, comfort food"
+        },
+        "LowV_LowA_LowD": {
+            "emotions": [
+                "Depressed",
+                "Bored",
+                "Powerless"
+            ],
+            "food_behavior": "Mindless comfort eating, sweet or heavy foods"
+        },
+        "LowV_HighA_HighD": {
+            "emotions": [
+                "Frustrated",
+                "Angry"
+            ],
+            "food_behavior": "Crunchy food for tension release, variable appetite"
+        },
+        "LowV_LowA_HighD": {
+            "emotions": [
+                "Resigned",
+                "Low Mood"
+            ],
+            "food_behavior": "Unhealthy choices with controlled quantity"
+        }
+    },
+    "Food_Type_Mapping": {
+        "Sweet": {
+            "typical_VAD": [
+                "LowV",
+                "LowA or HighA"
+            ],
+            "reason": "Boost mood, reward system, serotonin uplift"
+        },
+        "Salty_Tangy": {
+            "typical_VAD": [
+                "HighA",
+                "LowV"
             ],
             "reason": "Stress relief, sensory distraction, crunch for tension"
         },
@@ -497,296 +694,6 @@ In the output what you must include is(and the output should be in JSON):
 2. Top three products recommended as a list.
 3. Top three combos recommended as a list.
 """
-                },
-                {
-                    "role": "user",
-                    "content": str(input_data)
-                }
-            ],
-                temperature=2,
-                max_completion_tokens=1024,
-                top_p=1,
-                response_format={"type": "json_object"}
-            )
-            
-            # Process the response
-            response_content = completion.choices[0].message.content
-                
-            # Parse the JSON response
-            recommendations = json.loads(response_content)
-                
-        except Exception as api_error:
-            logger.error(f"Error calling Groq API: {str(api_error)}", exc_info=True)
-            return jsonify({
-                "status": "error",
-                "message": "Failed to get recommendations from the AI service"
-            }), 503
-        
-        # Normalize keys to ensure consistent capitalization
-        normalized_recommendations = {}
-        
-        # Convert keys to expected format (first letter capitalized)
-        for key, value in recommendations.items():
-            if key.lower() == 'emotion':
-                normalized_key = 'emotion'
-            elif key.lower() == 'top products':
-                normalized_key = 'top_products'
-            elif key.lower() == 'top combos':
-                normalized_key = 'top_combos'
-            else:
-                normalized_key = key
-            
-            normalized_recommendations[normalized_key] = value
-        
-        # Ensure emotion data is properly formatted
-        if "emotion" in normalized_recommendations:
-            if isinstance(normalized_recommendations["emotion"], list):
-                # Make sure each emotion word is a single string without spaces between characters
-                normalized_recommendations["emotion"] = ' '.join([str(word).strip() for word in normalized_recommendations["emotion"]])
-            elif isinstance(normalized_recommendations["emotion"], str):
-                # If emotion is a string, ensure it's properly formatted
-                normalized_recommendations["emotion"] = normalized_recommendations["emotion"].strip()
-        
-        # Ensure all required fields are present
-        response_data = {
-            "status": "success",
-            "emotion": normalized_recommendations.get("emotion", ""),
-            "top_products": normalized_recommendations.get("top_products", []),
-            "top_combos": normalized_recommendations.get("top_combos", []),
-            "message": "Recommendations generated successfully"
-        }
-        
-        # Log the successful response
-        logger.info("Food recommendations generated successfully")
-        
-        return jsonify(response_data)
-        
-    except json.JSONDecodeError as je:
-        logger.error(f"Error decoding API response: {str(je)}")
-        return jsonify({
-            "status": "error",
-            "message": "Failed to parse API response"
-        }), 500
-        
-    except requests.exceptions.RequestException as re:
-        logger.error(f"Network error while calling Groq API: {str(re)}")
-        return jsonify({
-            "status": "error",
-            "message": "Network error while calling the recommendation service"
-        }), 503
-        
-    except Exception as e:
-        logger.error(f"Unexpected error in get_food_recommendations: {str(e)}", exc_info=True)
-        return jsonify({
-            "status": "error",
-            "message": "An internal server error occurred"
-        }), 500
-def main() -> int:
-    """Main entry point for command-line execution.
-    
-    Returns:
-        int: Exit code (0 for success, non-zero for errors)
-    """
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <video_url_or_path>")
-        print("\nExamples:")
-        print(f"  {sys.argv[0]} https://example.com/video.mp4")
-        print(f"  {sys.argv[0]} /path/to/local/video.mp4")
-        return 1
-    
-    video_input = sys.argv[1]
-    
-    try:
-        result = process_video(video_input)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0 if result.get("status") == "success" else 1
-        
-    except VideoProcessingError as e:
-        error_result = {
-            "status": "error",
-            "message": str(e),
-            "result": None
-        }
-        print(json.dumps(error_result, indent=2, ensure_ascii=False))
-        return 1
-    except KeyboardInterrupt:
-        logger.info("Processing cancelled by user")
-        return 130  # Standard exit code for Ctrl+C
-    except Exception as e:
-        error_result = {
-            "status": "error",
-            "message": f"Unexpected error: {str(e)}",
-            "result": None
-        }
-        print(json.dumps(error_result, indent=2, ensure_ascii=False))
-        return 1
-
-
-class VideoInput(BaseModel):
-    video_url: Optional[str] = None
-    video_path: Optional[str] = None
-
-class FoodRecommendationRequest(BaseModel):
-    audio_emotion: str
-    video_emotion: str
-    vad_score: List[float]  # [valence, arousal, dominance]
-    contextual_data: Dict[str, Any]
-
-@app.post("/api/process_video")
-async def process_video_endpoint(
-    video_input: VideoInput = None,
-    file: UploadFile = File(None)
-):
-    """
-    Process video through Gradio API and return food recommendations.
-    Accepts either a video URL, file upload, or direct JSON input.
-    """
-    try:
-        # Handle file upload
-        if file:
-            # Save the uploaded file temporarily
-            temp_path = f"temp_{file.filename}"
-            with open(temp_path, "wb") as buffer:
-                buffer.write(await file.read())
-            
-            try:
-                # Process the video through Gradio API
-                gradio_result = GRADIO_CLIENT.predict(
-                    video_input={"video": handle_file(temp_path)},
-                    api_name="/process_video"
-                )
-            finally:
-                # Clean up the temporary file
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-        
-        # Handle URL input
-        elif video_input and (video_input.video_url or video_input.video_path):
-            video_source = video_input.video_url or video_input.video_path
-            gradio_result = GRADIO_CLIENT.predict(
-                video_input={"video": handle_file(video_source)},
-                api_name="/process_video"
-            )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Either provide a video file or video URL/path"
-            )
-        
-        # Extract only the required fields (VAD scores and contextual data)
-        # Expected gradio_result format:
-        # {
-        #   'audio_emotion': str,
-        #   'video_emotion': str,
-        #   'vad_score': [float, float, float],  # valence, arousal, dominance
-        #   'contextual_data': {
-        #       'time': str,
-        #       'date': str,
-        #       'location': str,
-        #       'weather': str,
-        #       'intent': List[str]  # optional
-        #   }
-        # }
-        
-        # Ensure we have the expected structure
-        if not isinstance(gradio_result, dict):
-            raise ValueError("Unexpected response format from Gradio API")
-            
-        # Extract VAD scores (ensure we have 3 values)
-        vad_score = gradio_result.get('vad_score', [0, 0, 0])
-        if not isinstance(vad_score, list) or len(vad_score) != 3:
-            logger.warning(f"Invalid VAD score format: {vad_score}")
-            vad_score = [0, 0, 0]
-            
-        # Get contextual data (ensure it's a dict)
-        contextual_data = gradio_result.get('contextual_data', {})
-        if not isinstance(contextual_data, dict):
-            contextual_data = {}
-            
-        # Prepare analysis data with only the required fields
-        analysis_data = {
-            'vad_score': vad_score,
-            'contextual_data': contextual_data
-        }
-        
-        # Get food recommendations using only VAD scores and contextual data
-        food_recommendations = get_food_recommendations(analysis_data)
-        
-        return JSONResponse(content={
-            "status": "success",
-            "data": food_recommendations,
-            "metadata": {
-                "source": "Gradio API processed",
-                "model_used": "nishantrajpoot/must_duplicate"
-            }
-        })
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-    except Exception as e:
-        logger.exception("Error processing video")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing video: {str(e)}"
-        )
-
-
-def get_food_recommendations(analysis_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Process the analysis result and return food recommendations using Groq API.
-    
-    Args:
-        analysis_result: Dictionary containing audio_emotion, video_emotion, vad_score, and contextual_data
-        
-    Returns:
-        Dict containing food recommendations and analysis
-    """
-    try:
-        # Extract data from analysis result
-        # audio_emotion = analysis_result.get('audio_emotion', 'neutral')
-        # video_emotion = analysis_result.get('video_emotion', 'neutral')
-        
-        # Get VAD scores (Valence, Arousal, Dominance)
-        vad_score = analysis_result.get('vad_score', [0, 0, 0])
-        if len(vad_score) != 3:
-            vad_score = [0, 0, 0]
-            
-        # Get contextual data
-        contextual_data = analysis_result.get('contextual_data', {})
-        
-        # Default intent (can be overridden by contextual data)
-        intent = contextual_data.get('intent', [])
-        if not isinstance(intent, list):
-            intent = [intent] if intent else []
-            
-        # Prepare input for Groq API
-        input_data = [vad_score, intent, contextual_data]
-        
-        # Initialize Groq client
-        if not GROQ_API_KEY:
-            logger.error("GROQ_API_KEY not found in environment variables")
-            raise ValueError("Server configuration error: GROQ_API_KEY not found")
-            
-        # Validate Groq API key format
-        if not isinstance(GROQ_API_KEY, str) or len(GROQ_API_KEY) < 30:
-            logger.error("Invalid GROQ_API_KEY format")
-            raise ValueError("Invalid server configuration")
-            
-        try:
-            client = Groq(api_key=GROQ_API_KEY)
-            
-            # Call the Groq API
-            completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """This system contains Input, Product dictionary you have to infer from input and recommend top three products and top three product combos from the product dictionary only which a person should consume at that particular time.
-
-Input: [VAD, Intent, Contextual Data], where VAD is a list containing Valence, Arousal, and Dominance values respectively for the user's emotion (VAD values varies from -1 to 1 not 0 to 1 so there might be cases where all three values are positive that doesn't mean they are in scale of 0 to 1 they are always in scale of -1 to +1), VAD score should be used to figure out what type of food the user should consume depending on the valence, arousal, and dominance data. Intent is a list that contains the user's preferences ["Hot", "Light", "Tangy"] about the product he wants to consume you should infer from this data for deciding the user preference upon which you should top 3 products to recommend there might be cases when intent list only contains one or two elements instead of three, in that case, you should consider only those preferences which are in the list and assuming other to be null. contextual data is also a list containing [time, date, location, weather] this is also an important part of our system. lets suppose according to the user's emotion and preference you have 5 items to recommend then use contextual data to re-arrange between them as first, second and third, the way you should do this is time, date, and weather. so basically see what time of the day it is and what type of food user should have at that particular time, from date you should find out if there is any festival in India on those particular day(here you can also see to 3 before and 3 after days of weeks as well if there is upcoming or there was any festival nearby this date), if yes then use this data as well for rearranging the recommendation, and from the weather use it to recommend the products that will suit at that particular weather(e.g. on sunny days recommend cooling products on the top). So basically you should use contextual data for final rearranging the products in between them so that we can come up with best top 3 recommendations. And keep in mind you should use contextual data only for rearranging between the products not deciding, products decision should be made only from VAD score and Intent list. Contextual data is just like oregano over pizza which enhance the taste of pizza but doesn't alter what it contain.
-
-[Previous product dictionary and recommendation logic remains the same...]"""
                     },
                     {
                         "role": "user",
@@ -839,19 +746,31 @@ Input: [VAD, Intent, Contextual Data], where VAD is a list containing Valence, A
             
         except Exception as api_error:
             logger.error(f"Error calling Groq API: {str(api_error)}", exc_info=True)
-            raise Exception("Failed to get recommendations from the AI service")
+            raise HTTPException(
+                status_code=503,
+                detail="Failed to get recommendations from the AI service"
+            )
             
     except json.JSONDecodeError as je:
         logger.error(f"Error decoding API response: {str(je)}")
-        raise Exception("Failed to parse API response")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to parse API response"
+        )
         
     except requests.exceptions.RequestException as re:
         logger.error(f"Network error while calling Groq API: {str(re)}")
-        raise Exception("Network error while calling the recommendation service")
+        raise HTTPException(
+            status_code=503,
+            detail="Network error while calling the recommendation service"
+        )
         
     except Exception as e:
         logger.error(f"Unexpected error in get_food_recommendations: {str(e)}", exc_info=True)
-        raise Exception(f"An internal server error occurred: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An internal server error occurred: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
