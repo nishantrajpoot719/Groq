@@ -50,26 +50,6 @@ def setup_logging() -> logging.Logger:
 
 logger = setup_logging()
 
-def is_valid_url(url: str) -> bool:
-    """Check if the provided string is a valid URL.
-    
-    Args:
-        url: The URL to validate
-        
-    Returns:
-        bool: True if URL is valid, False otherwise
-    """
-    try:
-        result = urllib.parse.urlparse(url)
-        return all([result.scheme, result.netloc])
-    except (ValueError, AttributeError):
-        return False
-
-
-class VideoInput(BaseModel):
-    video_url: Optional[str] = None
-    video_path: Optional[str] = None
-
 class FoodRecommendationRequest(BaseModel):
     audio_emotion: str
     video_emotion: str
@@ -78,9 +58,7 @@ class FoodRecommendationRequest(BaseModel):
 
 @app.get("/api/process_video")
 async def process_video_endpoint(
-    video_input: str,
-
-):
+    video_input: str):
     """
     Process video through Gradio API and return food recommendations.
     Accepts either a video URL, file upload, or direct JSON input.
@@ -89,13 +67,7 @@ async def process_video_endpoint(
         
         # Handle URL or local path input
         if video_input:
-            # Basic validation for URL or local path
-            if not (is_valid_url(video_input)):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid video URL or file not found: {video_input}"
-                )
-            
+            # Basic validation for URL or local path          
             gradio_result = GRADIO_CLIENT.predict(
                 video_input={"video": handle_file(video_input)},
                 api_name="/process_video"
