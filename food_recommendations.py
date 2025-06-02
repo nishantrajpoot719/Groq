@@ -1,148 +1,140 @@
-from flask import Flask, request, jsonify, make_response
-from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from functools import wraps
-import logging
-import os
 import json
-import time
-import requests
-from dotenv import load_dotenv
-from groq import Groq
+import logging
+import sys
+import urllib.parse
+from pathlib import Path
+from typing import Dict, Any, Optional, Union
 
-# Initialize Flask app
-app = Flask(__name__)
+from gradio_client import Client, handle_file
+from gradio_client.utils import InvalidApiNameError, GradioClientError
 
-# Security headers
-@app.after_request
-def add_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    response.headers['Content-Security-Policy'] = "default-src 'self'"
-    return response
+class VideoProcessingError(Exception):
+    """Custom exception for video processing errors."""
+    pass
 
-# Rate limiting
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"]
-)
 
-# Enable CORS for all routes
-CORS(app)
+def setup_logging() -> logging.Logger:
+    """Set up and configure the logger.
+    
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    
+    # Prevent adding multiple handlers if function is called multiple times
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    
+    return logger
 
-# Request timeout decorator
-def timeout(seconds=30):
-    """Decorator to add timeout functionality to route handlers.
+
+logger = setup_logging()
+
+def is_valid_url(url: str) -> bool:
+    """Check if the provided string is a valid URL.
     
     Args:
-        seconds (int): Maximum time in seconds before timing out
+        url: The URL to validate
         
     Returns:
-        function: Decorated function with timeout handling
-    """
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            start_time = time.time()
-            try:
-                # Call the original function
-                result = f(*args, **kwargs)
-                
-                # Check if the function took too long
-                elapsed = time.time() - start_time
-                if elapsed > seconds:
-                    logger.warning(f"Request timed out after {elapsed:.2f} seconds")
-                    return jsonify({"status": "error", "message": "Request timed out"}), 504
-                    
-                return result
-                
-            except Exception as e:
-                # Log the error and return a 500 response
-                logger.error(f"Error in request handler: {str(e)}", exc_info=True)
-                return jsonify({
-                    "status": "error", 
-                    "message": "An unexpected error occurred"
-                }), 500
-                
-        return decorated_function
-    return decorator
-
-# Initialize logger
-logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-# Health check endpoint
-@app.route('/', methods=['GET'])
-def health_check():
-    return jsonify({"status": "healthy", "message": "Food Recommendation API is running"})
-
-# Recommendation endpoint
-@app.route('/recommend', methods=['POST'])
-@limiter.limit("10 per minute")  # More specific rate limit for this endpoint
-@timeout(seconds=45)  # Add timeout for this endpoint
-def get_food_recommendations():
-    """
-    Get food recommendations from Groq API based on VAD score, intent selections, and contextual data.
-    
-    Request Body (JSON):
-    {
-        "vad_score": [float, float, float],  # [valence, arousal, dominance]
-        "intent_selections": ["string"],     # e.g., ["Hot", "Light", "Tangy"]
-        "contextual_data": ["string"]        # [time, date, location, weather]
-    }
-    
-    Returns:
-        JSON response containing status, emotion, top products, and top combos
+        bool: True if URL is valid, False otherwise
     """
     try:
-        # Get JSON data from request
-        data = request.get_json()
+        result = urllib.parse.urlparse(url)
+        return all([result.scheme, result.netloc])
+    except (ValueError, AttributeError):
+        return False
+
+
+def process_video(video_url: str) -> Dict[str, Any]:
+    """
+    Process video using Gradio API and return food recommendations.
+    
+    Args:
+        video_url: URL or local path of the video to process
         
-        # Validate required fields
-        if not data:
-            return jsonify({
-                "status": "error",
-                "message": "No input data provided"
-            }), 400
+    Returns:
+        Dict containing the processing results with the following structure:
+        {
+            "status": "success" | "error",
+            "result": Any,  # The processed result if successful
+            "message": str  # Error message if status is "error"
+        }
         
-        # Extract and validate required fields
+    Raises:
+        VideoProcessingError: If there's an error processing the video
+    """
+    # Validate input
+    if not video_url:
+        error_msg = "Video URL cannot be empty"
+        logger.error(error_msg)
+        raise VideoProcessingError(error_msg)
+    
+    # Check if it's a URL or local file
+    if not (is_valid_url(video_url) or Path(video_url).exists()):
+        error_msg = f"Invalid video URL or file not found: {video_url}"
+        logger.error(error_msg)
+        raise VideoProcessingError(error_msg)
+    
+    try:
+        logger.info("Initializing Gradio client...")
+        # Initialize client with error handling
         try:
-            vad_score = data['vad_score']
-            intent_selections = data['intent_selections']
-            contextual_data = data['contextual_data']
-        except KeyError as ke:
-            return jsonify({
-                "status": "error",
-                "message": f"Missing required field: {str(ke)}"
-            }), 400
+            client = Client("nishantrajpoot/must_duplicate")
+        except Exception as e:
+            error_msg = f"Failed to initialize Gradio client: {str(e)}"
+            logger.error(error_msg)
+            raise VideoProcessingError(error_msg) from e
         
-        # Input validation
-        if not isinstance(vad_score, list) or not all(isinstance(x, (int, float)) for x in vad_score) or len(vad_score) != 3:
-            return jsonify({
-                "status": "error",
-                "message": "vad_score must be a list of 3 numbers [valence, arousal, dominance]"
-            }), 400
+        logger.info(f"Processing video: {video_url}")
+        
+        try:
+            # Handle file (works with both URLs and local paths)
+            processed_file = handle_file(video_url)
             
-        if not isinstance(intent_selections, list) or not all(isinstance(x, str) for x in intent_selections):
-            return jsonify({
-                "status": "error",
-                "message": "intent_selections must be a list of strings"
-            }), 400
+            # Call the Gradio API
+            result = client.predict(
+                video_input={"video": processed_file},
+                api_name="/process_video"
+            )
             
-        if not isinstance(contextual_data, list) or len(contextual_data) != 4:
-            return jsonify({
-                "status": "error",
-                "message": "contextual_data must be a list of 4 elements [time, date, location, weather]"
-            }), 400
+            logger.info("Successfully processed video")
+            return {
+                "status": "success",
+                "result": result,
+                "message": "Video processed successfully"
+            }
             
-        # Initialize Groq client with API key
+        except InvalidApiNameError as e:
+            error_msg = f"Invalid API endpoint: {str(e)}"
+            logger.error(error_msg)
+            raise VideoProcessingError(error_msg) from e
+            
+        except GradioClientError as e:
+            error_msg = f"Gradio client error: {str(e)}"
+            logger.error(error_msg)
+            raise VideoProcessingError(error_msg) from e
+            
+        except Exception as e:
+            error_msg = f"Error during video processing: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            raise VideoProcessingError(error_msg) from e
+            
+    except VideoProcessingError:
+        # Re-raise our custom exceptions
+        raise
+        
+    except Exception as e:
+        # Catch any other unexpected errors
+        error_msg = f"Unexpected error: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        raise VideoProcessingError(error_msg) from e
         if not GROQ_API_KEY:
             logger.error("GROQ_API_KEY not found in environment variables")
             return jsonify({
@@ -609,5 +601,46 @@ In the output what you must include is(and the output should be in JSON):
             "status": "error",
             "message": "An internal server error occurred"
         }), 500
+def main() -> int:
+    """Main entry point for command-line execution.
+    
+    Returns:
+        int: Exit code (0 for success, non-zero for errors)
+    """
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <video_url_or_path>")
+        print("\nExamples:")
+        print(f"  {sys.argv[0]} https://example.com/video.mp4")
+        print(f"  {sys.argv[0]} /path/to/local/video.mp4")
+        return 1
+    
+    video_input = sys.argv[1]
+    
+    try:
+        result = process_video(video_input)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0 if result.get("status") == "success" else 1
+        
+    except VideoProcessingError as e:
+        error_result = {
+            "status": "error",
+            "message": str(e),
+            "result": None
+        }
+        print(json.dumps(error_result, indent=2, ensure_ascii=False))
+        return 1
+    except KeyboardInterrupt:
+        logger.info("Processing cancelled by user")
+        return 130  # Standard exit code for Ctrl+C
+    except Exception as e:
+        error_result = {
+            "status": "error",
+            "message": f"Unexpected error: {str(e)}",
+            "result": None
+        }
+        print(json.dumps(error_result, indent=2, ensure_ascii=False))
+        return 1
+
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+    sys.exit(main())
