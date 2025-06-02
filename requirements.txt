@@ -4,4 +4,3 @@ requests==2.31.0
 fastapi>=0.68.0
 uvicorn>=0.15.0
 python-multipart>=0.0.5
-gradio==5.31.0
