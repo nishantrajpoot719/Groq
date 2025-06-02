@@ -1,32 +1,7 @@
 from flask import Flask, request, jsonify
 from gradio_client import Client, handle_file
 
-app = Flask(__name__)
-client = Client("nishantrajpoot/must_duplicate")
 
-@app.route("/", methods=["GET"])
-def running():
-    return "Welcome to the Must Duplicate API!"
-
-@app.route("/process_video", methods=["POST","GET"])
-def process_video():
-    data = request.args
-    video_url = data.get("video_url")
-    result = client.predict(
-        video_input={"video": handle_file(video_url)},
-        api_name="/process_video"
-    )
-    # Extract VAD scores 
-    vad_score = result.get('Final VAD Score', [0, 0, 0]) 
-    # Get contextual data 
-    contextual_data = result.get('Contextual Information', [])  
-
-    analysis_data = {
-            'vad_score': vad_score,
-            'contextual_data': contextual_data
-        }
-    
-    food_recommendations = get_food_recommendations(analysis_data)
     
 
 
@@ -484,6 +459,34 @@ In the output what you must include is(and the output should be in JSON):
     }
             
     return jsonify(response_data)
+
+app = Flask(__name__)
+client = Client("nishantrajpoot/must_duplicate")
+
+@app.route("/", methods=["GET"])
+def running():
+    return "Welcome to the Must Duplicate API!"
+
+@app.route("/process_video", methods=["POST","GET"])
+def process_video():
+    data = request.args
+    video_url = data.get("video_url")
+    result = client.predict(
+        video_input={"video": handle_file(video_url)},
+        api_name="/process_video"
+    )
+    # Extract VAD scores 
+    vad_score = result.get('Final VAD Score', [0, 0, 0]) 
+    # Get contextual data 
+    contextual_data = result.get('Contextual Information', [])  
+
+    analysis_data = {
+            'vad_score': vad_score,
+            'contextual_data': contextual_data
+        }
+    
+    food_recommendations = get_food_recommendations(analysis_data)
+
 
 if __name__ == "_main_":
     app.run(debug = True)
