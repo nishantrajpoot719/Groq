@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Union
 
 from gradio_client import Client, handle_file
-from gradio_client.utils import InvalidApiNameError, GradioClientError
 
 class VideoProcessingError(Exception):
     """Custom exception for video processing errors."""
@@ -111,15 +110,6 @@ def process_video(video_url: str) -> Dict[str, Any]:
                 "message": "Video processed successfully"
             }
             
-        except InvalidApiNameError as e:
-            error_msg = f"Invalid API endpoint: {str(e)}"
-            logger.error(error_msg)
-            raise VideoProcessingError(error_msg) from e
-            
-        except GradioClientError as e:
-            error_msg = f"Gradio client error: {str(e)}"
-            logger.error(error_msg)
-            raise VideoProcessingError(error_msg) from e
             
         except Exception as e:
             error_msg = f"Error during video processing: {str(e)}"
