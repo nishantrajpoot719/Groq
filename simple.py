@@ -245,7 +245,38 @@ Product Dictionary: {
         "variants": [],
         "description": "Savory, crunchy, flavorful Indian snacks blend combining a variety of crunchy ingredients—like sev, peanuts, boondi, and spiced lentils—into one irresistible mix. Perfectly seasoned with traditional Indian spices, it's the ideal balance of taste, texture, and satisfaction in every bite. Great for tea-time, parties, or anytime cravings.}
 }
-Product dictionary contains products as a dictionary which further contains particular product variants available with their short description (but not limited to if you can think if additional discription you can include it at the time of making recommendations). You should recommend only one variant of a particular product (If you can't decide between variants which one to recommend you can choose any one at random from all of those variants listed). For the top three products on recommendation only recommend products which are not combo with other(e.g. Muesli should always be recommended with milk never recommended alone, and Malabar parata should always be recommended with pickles never alone so these products should be recommended as combos other than top three products recommended and you also have to recommend top three combos with top three products(If there is no combo that you can think of from user input(i.e. VAD and intent) you can recommend any three combos at random.), in case of chips and puffs you can recommend them in bundles as single product as well. And one more thing during recommendation in case of products with variants use the name of variant on recommendation not the product name(e.g. if you are considering recommending chips never show chips in the recommendation output only write the final variant name that you decided to recommend.
+
+PRODUCT DICTIONARY PROTOCOL — READ. OBEY. RECOMMEND ACCURATELY.
+1. VARIANT-ONLY RECOMMENDATION (NO GENERIC NAMES!)
+Each product in the dictionary contains multiple variants, each with its own short description. Only recommend ONE variant per product, never the generic product name. So don’t say “Chips” — say “Peri Peri Chips” or “Cream & Onion Chips.”
+If torn between variants and can’t make a decision? Just pick one at random. But decide — don’t freeze.
+
+2. TOP 3 PRODUCTS — NO COMBOS, ONLY STANDALONES (STRICT)
+The first three recommended items MUST be standalone, non-combo products.
+For example:
+Muesli? ❌ Never alone. Always needs Milk to qualify.
+Malabar Paratha? ❌ Not without Pickles.
+Such items should only appear in combo recommendations, never in the top 3 product list.
+
+3. TOP 3 COMBOS — ALWAYS PAIR WITH TOP 3 PRODUCTS
+For every top 3 standalone product you recommend, generate a thoughtful combo pairing.
+Can’t find a combo that matches the VAD and user intent? Fallback allowed — choose any random, pre-approved combo.
+All combos must respect the combo constraints defined in the product dictionary. No Frankenstein pairings.
+
+4. CHIPS, PUFFS, AND FRIENDS — BUNDLE THEM SMARTLY
+When recommending items like Chips, Puffs, Foxnuts, or other snackables, you can bundle them as a single product group.
+Example: “Spicy Puffs + Cheese Puffs” as one bundled item is valid. But again, refer only by their variant names, not the category.
+
+5. DESCRIPTION FLEXIBILITY — ADD MORE IF NEEDED
+The product dictionary gives you a starter description for each variant. But if you think a product needs a sharper pitch (e.g., context-aware adjectives, taste notes, use-cases), you’re empowered to add that dynamically. Elevate the recommendation with smart copy.
+
+BOTTOM LINE CHECKLIST ✅
+ Are top 3 products standalone (no forced combos like muesli or paratha)?
+ Are you showing only variant names (not base product names)?
+ Is each top product backed by a legit combo?
+ Did you respect the combo constraints from the product dictionary?
+ If you couldn’t match intent or VAD for combos, did you pick random but valid ones?
+ Are chips/puffs bundled smartly when needed?
 
 Below are the use cases(but not limited to If you can think of more you should consider including them as well before making recommendations) they explain different cases and their different behavior but I am not limiting you to these use cases only you can use your own analysis and consider these use cases as well in your analysis, If you find and of these thing contradictory to you analysis you are free to go with your own analysis and ignore these use cases:
 {
@@ -402,21 +433,44 @@ Below are the use cases(but not limited to If you can think of more you should c
         }
     }
 }
-In case of some bottlenecks you should proceed in the way below:
-1. In case of user requesting "light" product while having a VAD profile that suggests a "Heavy" product. You should give preference to user preference of light product instead of VAD profile suggesting Heavy product.
-2. In case of user has multiple intents (e.g., ["Hot", "Light", "Healthy"]), the system might struggle to prioritize or combine these intents accurately. here you can choose which intent to prioritize and which one to drop, if you are struggling to recommend product based on these intent. BUT don't make it a habit of dropping or ignoring intent consider all of the intents wherever possible.
-3. The system categorizes products into types (e.g., Sweet, Salty, Crunchy). However, some products might belong to multiple categories or have ambiguous categorization, leading to inconsistent recommendations: In this case where the product belongs to multiple categories you can use them recommending into multiple profiles as well instead of only listed types.
-4. In case of multiple variants where system struggle to choose between them, it can decide randomly between the variants.
-5. In case of generating combos if you are unable to find combos matching to user's VAD and intent, you can decide other combos randomly and recommend them.
-6. Use contextual data only to rearrange the recommended products, If you can't use contextual data it is not a must but use contextual data wherever possible.
 
-In case of recommending products and combos which contain variants don't recommend as "Makhana - Roasted Makhana" Instead recommend only "Roasted Makhana". And in case of Combos there are very randomness (i.e. products are combined without any match between them(e.g. Mango Yogurt & Muesli and Flakes - Muesli where Mango Yogurt has no combo with Muesli.)) In the product dictionary there is explicitly mentioned which product can be combined with other products. So I want you to use that information to recommend combos not any random combination to make.
+In case of bottlenecks, FOLLOW these non-negotiable directives:
 
+1. USER-FIRST RULE (CRITICAL!)
+If a user explicitly screams “Light” yet their VAD profile whispers “Heavy,” ALWAYS honor the user. Override the VAD suggestion without hesitation.
 
-In the output what you must include is(and the output should be in JSON):
+2. MULTI-INTENT TRIAGE (HANDLE WITH CARE)
+When a request packs several intents—say Hot + Light + Healthy—the engine might choke. Prioritize the clearest intent, drop only the least relevant if absolutely necessary, and document the choice. Do not make dropping intents your default move; aim to satisfy them all whenever feasible.
+
+3. CATEGORY CROSSOVER (EMBRACE AMBIGUITY)
+Products often straddle labels—Sweet and Crunchy, Salty and Nutty. If an item fits more than one bucket, actively surface it in every matching profile. Don’t force a single tag; let the product shine wherever it belongs.
+
+4. VARIANT DEADLOCK (RANDOM RESOLVE)
+If two or more variants tie for the top spot and the system can’t decide, flip a virtual coin. Randomly pick one, log the choice, move on.
+
+5 .COMBO CONUNDRUM (SMART PAIRING ONLY!)
+Struggling to craft a combo that nails both VAD and intent? Fallback to random—but legal—combos ONLY after exhausting valid matches. “Legal” means the pairing exists in the product-dictionary whitelist; rogue mash-ups are forbidden.
+
+6.CONTEXTUAL SORTING (BONUS BOOST)
+Use contextual cues (time of day, weather, purchase history) to re-rank the final list. If context is unavailable, skip—context is a turbocharger, not the engine.
+
+Naming & Combo Integrity — ABSOLUTE MUST-DOS
+Variants: Never push clunky labels like “Makhana – Roasted Makhana.” Serve the clean variant name—“Roasted Makhana.”
+Combos: Do NOT Frankenstein random items (e.g., Mango Yogurt + Plain Muesli with no authorized link). Stick strictly to dictionary-approved pairings.
+Diversity Mandate: Resist the urge to champion the same ultra-versatile items every time. Rotate through the catalog to keep recommendations fresh, niche-aware, and exciting.
+
+In the output what you must include is:
 1. Emotion of the user from the VAD score limiting it to only two words (i.e. those two words should be self-explanatory about the user's emotion). If there is a way to write it in only one word then there is no need to write two words for emotion.
 2. Top three products recommended as a list.
 3. Top three combos recommended as a list.
+
+And answer should be in JSON format specified below:
+result: {
+"Emotion": "Emotion in only two word max in string data type",
+"Products": ["Product 1", "Product 2", "Product 3"],
+"Combos": ["Combo 1", "Combo 2", "Combo 3"],
+"message": "Recommendations generated successfully"
+}
 """
                     },
                     {
@@ -424,7 +478,7 @@ In the output what you must include is(and the output should be in JSON):
                         "content": str(input_data)
                     }
                 ],
-                temperature=1,
+                temperature=0.7,
                 max_tokens=1024,
                 top_p=1,
                 response_format={"type": "json_object"}
@@ -444,12 +498,6 @@ In the output what you must include is(and the output should be in JSON):
         else:
             normalized_key = key
         normalized_recommendations[normalized_key] = value
-
-    if "emotion" in normalized_recommendations:
-        if isinstance(normalized_recommendations["emotion"], list):
-            normalized_recommendations["emotion"] = ' '.join([str(word).strip() for word in normalized_recommendations["emotion"]])
-        elif isinstance(normalized_recommendations["emotion"], str):
-            normalized_recommendations["emotion"] = normalized_recommendations["emotion"].strip()
 
     response_data = {
         "emotion": normalized_recommendations.get("emotion", ""),
