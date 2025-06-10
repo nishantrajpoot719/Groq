@@ -491,18 +491,18 @@ result: {
     for key, value in recommendations.items():
         if key.lower() == 'emotion':    
             normalized_key = 'emotion'
-        elif key.lower() == 'top products':
-            normalized_key = 'top_products'
-        elif key.lower() == 'top combos':
-            normalized_key = 'top_combos'
+        elif key.lower() == 'Products':
+            normalized_key = 'Products'
+        elif key.lower() == 'Combos':
+            normalized_key = 'Combos'
         else:
             normalized_key = key
         normalized_recommendations[normalized_key] = value
 
     response_data = {
-        "emotion": normalized_recommendations.get("emotion", ""),
-        "top_products": normalized_recommendations.get("top_products", []),
-        "top_combos": normalized_recommendations.get("top_combos", []),
+        "emotion": normalized_recommendations.get("Emotion", ""),
+        "Products": normalized_recommendations.get("Products", []),
+        "Combos": normalized_recommendations.get("Combos", []),
         "message": "Recommendations generated successfully"
     }
             
