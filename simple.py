@@ -1,5 +1,8 @@
 from flask import Flask, request, jsonify
 from gradio_client import Client, handle_file
+import json
+import os
+from groq import Groq
 
 def get_food_recommendations(analysis_result):
     vad_score = analysis_result.get('vad_score')
