@@ -1,10 +1,6 @@
 from flask import Flask, request, jsonify
 from gradio_client import Client, handle_file
 
-
-    
-
-
 def get_food_recommendations(analysis_result):
     vad_score = analysis_result.get('vad_score')
     contextual_data = analysis_result.get('contextual_data')
@@ -475,10 +471,10 @@ result: {
                     },
                     {
                         "role": "user",
-                        "content": str(input_data)
+                        "content": json.dumps(input_data)
                     }
                 ],
-                temperature=0.7,
+                temperature=1,
                 max_tokens=1024,
                 top_p=1,
                 response_format={"type": "json_object"}
@@ -487,22 +483,10 @@ result: {
     response_content = completion.choices[0].message.content
     recommendations = json.loads(response_content)
 
-    normalized_recommendations = {}
-    for key, value in recommendations.items():
-        if key.lower() == 'emotion':    
-            normalized_key = 'emotion'
-        elif key.lower() == 'Products':
-            normalized_key = 'Products'
-        elif key.lower() == 'Combos':
-            normalized_key = 'Combos'
-        else:
-            normalized_key = key
-        normalized_recommendations[normalized_key] = value
-
     response_data = {
-        "emotion": normalized_recommendations.get("Emotion", ""),
-        "Products": normalized_recommendations.get("Products", []),
-        "Combos": normalized_recommendations.get("Combos", []),
+        "Emotion": recommendations.get("Emotion", ""),
+        "Products": recommendations.get("Products", []),
+        "Combos": recommendations.get("Combos", []),
         "message": "Recommendations generated successfully"
     }
             
@@ -533,7 +517,7 @@ def process_video():
             'contextual_data': contextual_data
         }
     
-    food_recommendations = get_food_recommendations(analysis_data)
+    return get_food_recommendations(analysis_data)
 
 
 if __name__ == "_main_":
