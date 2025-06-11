@@ -7,3 +7,4 @@ python-multipart>=0.0.5
 gradio==5.31.0
 flask>=2.0.0
 gunicorn
+json
